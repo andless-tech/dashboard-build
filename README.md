@@ -15,8 +15,9 @@ repository. It does not mirror or publish the dashboard source code.
    to create a draft GitHub Release.
 
 The workflow resolves the requested ref to an immutable commit before starting
-the platform matrix. Release assets include `BUILD-METADATA.json` and
-`SHA256SUMS`.
+the platform matrix. When `release_tag` is set, its version is written into the
+temporary Tauri build configuration so installer filenames match the source
+tag. Release assets include `BUILD-METADATA.json` and `SHA256SUMS`.
 
 ## Automatic tag builds
 
@@ -27,7 +28,9 @@ and `release_tag`.
 
 Only the latest version tag is considered. A failed build is not automatically
 retried because its workflow run still acts as the deduplication marker; rerun
-that workflow manually after fixing the failure.
+that workflow manually after fixing the failure. A rerun may replace assets
+only while the matching GitHub Release remains a draft; published releases are
+never overwritten.
 
 GitHub may delay scheduled workflows during periods of high load. Scheduled
 workflows in public repositories can also be disabled after 60 days without
