@@ -1,0 +1,272 @@
+name: Build private dashboard
+
+run-name: Build dashboard ${{ inputs.source_ref }}${{ inputs.release_tag != '' && format(' as {0}', inputs.release_tag) || '' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Private dashboard ref (main, a 40-character commit SHA, or a v-prefixed version tag)
+        required: true
+        default: main
+        type: string
+      release_tag:
+        description: Optional public release tag such as v0.1.0; leave empty to produce Actions artifacts only
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: dashboard-build-${{ inputs.source_ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate request
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Validate source and release refs
+        shell: bash
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$SOURCE_REF" != "main" \
+            && ! "$SOURCE_REF" =~ ^[0-9a-f]{40}$ \
+            && ! "$SOURCE_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::source_ref must be main, a full commit SHA, or a v-prefixed version tag"
+            exit 1
+          fi
+
+          if [[ -n "$RELEASE_TAG" \
+            && ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::release_tag must be empty or a v-prefixed version tag"
+            exit 1
+          fi
+
+  resolve:
+    name: Resolve private source
+    needs: validate
+    runs-on: ubuntu-24.04
+    environment: private-source
+    outputs:
+      source_sha: ${{ steps.metadata.outputs.source_sha }}
+      app_version: ${{ steps.metadata.outputs.app_version }}
+    steps:
+      - name: Checkout private dashboard source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: andless-tech/dashboard
+          ref: ${{ inputs.source_ref }}
+          ssh-key: ${{ secrets.DASHBOARD_DEPLOY_KEY }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+
+      - name: Resolve immutable metadata
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_SHA="$(git -C source rev-parse HEAD)"
+          APP_VERSION="$(jq -r '.version' source/src-tauri/tauri.conf.json)"
+
+          if [[ ! "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid application version in tauri.conf.json"
+            exit 1
+          fi
+
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "app_version=$APP_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved private source to $SOURCE_SHA (dashboard $APP_VERSION)"
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs:
+      - validate
+      - resolve
+    runs-on: ${{ matrix.os }}
+    environment: private-source
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            tauri_args: --target x86_64-unknown-linux-gnu --bundles deb,appimage
+            artifact_name: dashboard-linux-x64
+            artifact_path: |
+              source/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+              source/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
+
+          - name: macOS Intel
+            os: macos-15
+            target: x86_64-apple-darwin
+            tauri_args: --target x86_64-apple-darwin --bundles dmg
+            artifact_name: dashboard-macos-intel
+            artifact_path: source/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+
+          - name: macOS Apple Silicon
+            os: macos-15
+            target: aarch64-apple-darwin
+            tauri_args: --target aarch64-apple-darwin --bundles dmg
+            artifact_name: dashboard-macos-apple-silicon
+            artifact_path: source/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+
+          - name: Windows x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            tauri_args: --target x86_64-pc-windows-msvc --bundles nsis
+            artifact_name: dashboard-windows-x64
+            artifact_path: source/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+
+    steps:
+      - name: Checkout immutable private dashboard source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: andless-tech/dashboard
+          ref: ${{ needs.resolve.outputs.source_sha }}
+          ssh-key: ${{ secrets.DASHBOARD_DEPLOY_KEY }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify source commit
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ needs.resolve.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA="$(git -C source rev-parse HEAD)"
+          if [[ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]]; then
+            echo "::error::Private source commit changed during checkout"
+            exit 1
+          fi
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Setup protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            patchelf \
+            libhidapi-dev \
+            libudev-dev
+
+      - name: Install frontend dependencies
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+
+      - name: Build desktop bundle
+        working-directory: source
+        env:
+          CI: "true"
+        run: pnpm tauri build --ci ${{ matrix.tauri_args }}
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Create draft release
+    if: inputs.release_tag != ''
+    needs:
+      - resolve
+      - build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download bundles
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: release-artifacts
+
+      - name: Generate checksums and build metadata
+        shell: bash
+        env:
+          APP_VERSION: ${{ needs.resolve.outputs.app_version }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg source_repository "andless-tech/dashboard" \
+            --arg source_ref "$SOURCE_REF" \
+            --arg source_sha "$SOURCE_SHA" \
+            --arg app_version "$APP_VERSION" \
+            '{
+              source_repository: $source_repository,
+              source_ref: $source_ref,
+              source_sha: $source_sha,
+              app_version: $app_version
+            }' > release-artifacts/BUILD-METADATA.json
+
+          (
+            cd release-artifacts
+            find . -type f ! -name SHA256SUMS -print0 \
+              | sort -z \
+              | xargs -0 sha256sum > SHA256SUMS
+          )
+
+      - name: Create draft GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          APP_VERSION: ${{ needs.resolve.outputs.app_version }}
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release $RELEASE_TAG already exists"
+            exit 1
+          fi
+
+          mapfile -d '' FILES < <(find release-artifacts -type f -print0 | sort -z)
+          gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --draft \
+            --title "Dashboard $APP_VERSION" \
+            --notes "Built from private source commit \`$SOURCE_SHA\`. Verify downloaded files against \`SHA256SUMS\`." \
+            "${FILES[@]}"
