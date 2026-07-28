@@ -215,6 +215,10 @@ jobs:
         working-directory: source
         env:
           CI: "true"
+          # CMake 4 removed compatibility with policy versions below 3.5.
+          # audiopus_sys 0.2.2 bundles an older Opus CMake project, so provide
+          # the compatibility floor without modifying the private source.
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
         run: pnpm tauri build --ci ${{ matrix.tauri_args }}
 
       - name: Upload bundle

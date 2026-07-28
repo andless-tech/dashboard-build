@@ -13,29 +13,49 @@ repository. It does not mirror or publish the dashboard source code.
    - a version tag such as `v0.1.0`
 3. Leave `release_tag` empty for 14-day Actions artifacts, or set a version tag
    to create a draft GitHub Release.
-4. Approve access to the protected `private-source` environment when prompted.
 
 The workflow resolves the requested ref to an immutable commit before starting
 the platform matrix. Release assets include `BUILD-METADATA.json` and
 `SHA256SUMS`.
 
+## Automatic tag builds
+
+`Watch private dashboard tags` checks the private repository every five minutes.
+When the latest `v`-prefixed semantic version tag has no corresponding build
+run, it dispatches `Build private dashboard` with that tag as both `source_ref`
+and `release_tag`.
+
+Only the latest version tag is considered. A failed build is not automatically
+retried because its workflow run still acts as the deduplication marker; rerun
+that workflow manually after fixing the failure.
+
+GitHub may delay scheduled workflows during periods of high load. Scheduled
+workflows in public repositories can also be disabled after 60 days without
+repository activity.
+
 ## Security boundary
 
-- Private source access uses a short-lived token minted by a GitHub App that is
-  installed only on `andless-tech/dashboard` with `Contents: Read`.
+- Private source access uses a short-lived token minted by a GitHub App and
+  explicitly scoped by each workflow job to `andless-tech/dashboard` with
+  `Contents: Read`.
 - Secrets are not available to fork pull requests.
-- The workflow is manual-only and accepts only `main`, full commit SHAs, and
-  version tags.
+- The build workflow accepts only `main`, full commit SHAs, and version tags;
+  the automatic watcher dispatches version tags only.
 - Third-party Actions are pinned to full commit SHAs.
 - This repository does not hold OSS, MQTT, webhook, or code-signing
   credentials.
 - Build caches are intentionally disabled so private build intermediates are
   not uploaded.
 
-Anyone who can change a workflow and obtain approval for the
-`private-source` environment could attempt to expose private source. Keep
-workflow write access and environment approval restricted to trusted
-maintainers.
+Anyone who can change a workflow on `main` could attempt to expose private
+source. Keep workflow write access restricted to trusted maintainers and retain
+branch protection and CODEOWNERS review for `.github/workflows/`.
+
+The current GitHub App installation is organization-wide by administrator
+choice. Although normal jobs request a dashboard-only token, a malicious
+workflow with access to the App private key could request a broader token.
+Restricting the App installation to the dashboard repository remains the safer
+configuration.
 
 The protected `private-source` environment must contain:
 
@@ -44,8 +64,7 @@ The protected `private-source` environment must contain:
 
 Do not replace these with a personal access token. The GitHub App must have no
 organization or repository permissions other than read-only repository
-contents, and its installation must select only the private dashboard
-repository.
+contents.
 
 ## Current limitation
 
