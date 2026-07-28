@@ -82,10 +82,16 @@ jobs:
       - name: Resolve immutable metadata
         id: metadata
         shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
           SOURCE_SHA="$(git -C source rev-parse HEAD)"
-          APP_VERSION="$(jq -r '.version' source/src-tauri/tauri.conf.json)"
+          if [[ -n "$RELEASE_TAG" ]]; then
+            APP_VERSION="${RELEASE_TAG#v}"
+          else
+            APP_VERSION="$(jq -r '.version' source/src-tauri/tauri.conf.json)"
+          fi
 
           if [[ ! "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::Invalid application version in tauri.conf.json"
@@ -181,6 +187,24 @@ jobs:
         with:
           node-version: 22
 
+      - name: Set application version from release tag
+        if: inputs.release_tag != ''
+        shell: bash
+        working-directory: source
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          APP_VERSION="${RELEASE_TAG#v}"
+          APP_VERSION="$APP_VERSION" node -e '
+            const fs = require("node:fs");
+            const path = "src-tauri/tauri.conf.json";
+            const config = JSON.parse(fs.readFileSync(path, "utf8"));
+            config.version = process.env.APP_VERSION;
+            fs.writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+          '
+          echo "Set application version to $APP_VERSION"
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
@@ -271,7 +295,7 @@ jobs:
               | xargs -0 sha256sum > SHA256SUMS
           )
 
-      - name: Create draft GitHub release
+      - name: Create or replace draft GitHub release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -281,16 +305,52 @@ jobs:
         run: |
           set -euo pipefail
 
+          IS_DRAFT="false"
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "::error::Release $RELEASE_TAG already exists"
-            exit 1
+            IS_DRAFT="$(
+              gh release view "$RELEASE_TAG" \
+                --repo "$GITHUB_REPOSITORY" \
+                --json isDraft \
+                --jq '.isDraft'
+            )"
+            if [[ "$IS_DRAFT" != "true" ]]; then
+              echo "::error::Refusing to replace published release $RELEASE_TAG"
+              exit 1
+            fi
+
+            mapfile -t EXISTING_ASSETS < <(
+              gh release view "$RELEASE_TAG" \
+                --repo "$GITHUB_REPOSITORY" \
+                --json assets \
+                --jq '.assets[].name'
+            )
+            for ASSET in "${EXISTING_ASSETS[@]}"; do
+              gh release delete-asset "$RELEASE_TAG" "$ASSET" \
+                --repo "$GITHUB_REPOSITORY" \
+                --yes
+            done
           fi
 
           mapfile -d '' FILES < <(find release-artifacts -type f -print0 | sort -z)
-          gh release create "$RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --draft \
-            --title "Dashboard $APP_VERSION" \
-            --notes "Built from private source commit \`$SOURCE_SHA\`. Verify downloaded files against \`SHA256SUMS\`." \
-            "${FILES[@]}"
+          RELEASE_NOTES="Built from private source commit \`$SOURCE_SHA\`. Verify downloaded files against \`SHA256SUMS\`."
+
+          if [[ "$IS_DRAFT" == "true" ]]; then
+            gh release edit "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --draft \
+              --title "Dashboard $APP_VERSION" \
+              --notes "$RELEASE_NOTES"
+            gh release upload "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber \
+              "${FILES[@]}"
+          else
+            gh release create "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --draft \
+              --title "Dashboard $APP_VERSION" \
+              --notes "$RELEASE_NOTES" \
+              "${FILES[@]}"
+          fi
