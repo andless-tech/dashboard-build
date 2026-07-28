@@ -8,6 +8,7 @@ Report security issues privately to the Andless maintainers through the
 organization's established private contact channel.
 
 The build repository intentionally has no production publishing credentials.
-If a workflow, deploy key, or release artifact may have been compromised,
-disable the workflow, revoke the deploy key on `andless-tech/dashboard`, and
-rotate any affected signing material before rebuilding.
+If a workflow, GitHub App private key, or release artifact may have been
+compromised, disable the workflow, revoke or suspend the dashboard-only GitHub
+App installation, rotate its private key, and rotate any affected signing
+material before rebuilding.

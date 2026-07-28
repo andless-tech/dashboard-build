@@ -58,12 +58,22 @@ jobs:
       source_sha: ${{ steps.metadata.outputs.source_sha }}
       app_version: ${{ steps.metadata.outputs.app_version }}
     steps:
+      - name: Create short-lived private source token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ secrets.DASHBOARD_APP_ID }}
+          private-key: ${{ secrets.DASHBOARD_APP_PRIVATE_KEY }}
+          owner: andless-tech
+          repositories: dashboard
+          permission-contents: read
+
       - name: Checkout private dashboard source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: andless-tech/dashboard
           ref: ${{ inputs.source_ref }}
-          ssh-key: ${{ secrets.DASHBOARD_DEPLOY_KEY }}
+          token: ${{ steps.app-token.outputs.token }}
           path: source
           fetch-depth: 1
           persist-credentials: false
@@ -128,12 +138,22 @@ jobs:
             artifact_path: source/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
 
     steps:
+      - name: Create short-lived private source token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ secrets.DASHBOARD_APP_ID }}
+          private-key: ${{ secrets.DASHBOARD_APP_PRIVATE_KEY }}
+          owner: andless-tech
+          repositories: dashboard
+          permission-contents: read
+
       - name: Checkout immutable private dashboard source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: andless-tech/dashboard
           ref: ${{ needs.resolve.outputs.source_sha }}
-          ssh-key: ${{ secrets.DASHBOARD_DEPLOY_KEY }}
+          token: ${{ steps.app-token.outputs.token }}
           path: source
           fetch-depth: 1
           persist-credentials: false

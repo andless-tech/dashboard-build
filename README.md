@@ -21,8 +21,8 @@ the platform matrix. Release assets include `BUILD-METADATA.json` and
 
 ## Security boundary
 
-- Private source access uses a read-only deploy key scoped only to
-  `andless-tech/dashboard`.
+- Private source access uses a short-lived token minted by a GitHub App that is
+  installed only on `andless-tech/dashboard` with `Contents: Read`.
 - Secrets are not available to fork pull requests.
 - The workflow is manual-only and accepts only `main`, full commit SHAs, and
   version tags.
@@ -36,6 +36,16 @@ Anyone who can change a workflow and obtain approval for the
 `private-source` environment could attempt to expose private source. Keep
 workflow write access and environment approval restricted to trusted
 maintainers.
+
+The protected `private-source` environment must contain:
+
+- `DASHBOARD_APP_ID`
+- `DASHBOARD_APP_PRIVATE_KEY`
+
+Do not replace these with a personal access token. The GitHub App must have no
+organization or repository permissions other than read-only repository
+contents, and its installation must select only the private dashboard
+repository.
 
 ## Current limitation
 
