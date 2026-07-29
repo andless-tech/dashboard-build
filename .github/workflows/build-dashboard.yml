@@ -49,6 +49,11 @@ jobs:
             exit 1
           fi
 
+          if [[ -n "$RELEASE_TAG" && "$SOURCE_REF" != "$RELEASE_TAG" ]]; then
+            echo "::error::A release build must use the same version tag for source_ref and release_tag"
+            exit 1
+          fi
+
   resolve:
     name: Resolve private source
     needs: validate
@@ -57,6 +62,7 @@ jobs:
     outputs:
       source_sha: ${{ steps.metadata.outputs.source_sha }}
       app_version: ${{ steps.metadata.outputs.app_version }}
+      force_update: ${{ steps.metadata.outputs.force_update }}
     steps:
       - name: Create short-lived private source token
         id: app-token
@@ -83,12 +89,30 @@ jobs:
         id: metadata
         shell: bash
         env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_REF: ${{ inputs.source_ref }}
         run: |
           set -euo pipefail
           SOURCE_SHA="$(git -C source rev-parse HEAD)"
+          FORCE_UPDATE="false"
           if [[ -n "$RELEASE_TAG" ]]; then
             APP_VERSION="${RELEASE_TAG#v}"
+
+            TAG_REF="$(
+              gh api "repos/andless-tech/dashboard/git/ref/tags/$SOURCE_REF"
+            )"
+            if [[ "$(jq -r '.object.type' <<< "$TAG_REF")" == "tag" ]]; then
+              TAG_OBJECT_SHA="$(jq -r '.object.sha' <<< "$TAG_REF")"
+              TAG_MESSAGE="$(
+                gh api "repos/andless-tech/dashboard/git/tags/$TAG_OBJECT_SHA" \
+                  --jq '.message'
+              )"
+              if grep -qiF '[force]' <<< "$TAG_MESSAGE"; then
+                FORCE_UPDATE="true"
+                echo "Version tag requests a forced update"
+              fi
+            fi
           else
             APP_VERSION="$(jq -r '.version' source/src-tauri/tauri.conf.json)"
           fi
@@ -100,6 +124,7 @@ jobs:
 
           echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
           echo "app_version=$APP_VERSION" >> "$GITHUB_OUTPUT"
+          echo "force_update=$FORCE_UPDATE" >> "$GITHUB_OUTPUT"
           echo "Resolved private source to $SOURCE_SHA (dashboard $APP_VERSION)"
 
   build:
@@ -354,3 +379,182 @@ jobs:
               --notes "$RELEASE_NOTES" \
               "${FILES[@]}"
           fi
+
+  publish:
+    name: Publish to OSS and MQTT
+    if: inputs.release_tag != ''
+    needs:
+      - resolve
+      - build
+      - release
+    runs-on: ubuntu-24.04
+    environment: release-publish
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout packaging scripts
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Download bundles
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: artifacts
+
+      - name: Prepare versioned release manifest
+        id: release-meta
+        shell: bash
+        env:
+          APP_VERSION: ${{ needs.resolve.outputs.app_version }}
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          FORCE_UPDATE: ${{ needs.resolve.outputs.force_update }}
+        run: bash scripts/prepare-dashboard-release.sh
+
+      - name: Install ossutil v2
+        shell: bash
+        run: |
+          set -euo pipefail
+          OSSUTIL_VERSION="2.2.1"
+          ARCHIVE="$RUNNER_TEMP/ossutil-${OSSUTIL_VERSION}.zip"
+          curl --fail --silent --show-error --location --retry 3 \
+            --output "$ARCHIVE" \
+            "https://gosspublic.alicdn.com/ossutil/v2/${OSSUTIL_VERSION}/ossutil-${OSSUTIL_VERSION}-linux-amd64.zip"
+          unzip -q "$ARCHIVE" -d "$RUNNER_TEMP"
+          OSSUTIL_DIR="$RUNNER_TEMP/ossutil-${OSSUTIL_VERSION}-linux-amd64"
+          test -x "$OSSUTIL_DIR/ossutil"
+          echo "$OSSUTIL_DIR" >> "$GITHUB_PATH"
+          "$OSSUTIL_DIR/ossutil" version
+
+      - name: Upload immutable release to OSS
+        shell: bash
+        env:
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
+          VERSION_DIR: ${{ steps.release-meta.outputs.version_dir }}
+        run: |
+          set -euo pipefail
+          : "${OSS_ACCESS_KEY_ID:?Missing OSS_ACCESS_KEY_ID}"
+          : "${OSS_ACCESS_KEY_SECRET:?Missing OSS_ACCESS_KEY_SECRET}"
+          : "${OSS_BUCKET:?Missing OSS_BUCKET}"
+          : "${OSS_ENDPOINT:?Missing OSS_ENDPOINT}"
+
+          ENDPOINT_HOST="${OSS_ENDPOINT#http://}"
+          ENDPOINT_HOST="${ENDPOINT_HOST#https://}"
+          ENDPOINT_HOST="${ENDPOINT_HOST%/}"
+          REGION="${ENDPOINT_HOST#oss-}"
+          REGION="${REGION%%.*}"
+
+          for FILE in release-files/*; do
+            ossutil cp "$FILE" \
+              "oss://${OSS_BUCKET}/${VERSION_DIR}/$(basename "$FILE")" \
+              --endpoint="$OSS_ENDPOINT" \
+              --region="$REGION" \
+              --force
+          done
+          ossutil cp manifest.json \
+            "oss://${OSS_BUCKET}/${VERSION_DIR}/manifest.json" \
+            --endpoint="$OSS_ENDPOINT" \
+            --region="$REGION" \
+            --force
+
+      - name: Publish latest manifest
+        shell: bash
+        env:
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          ENDPOINT_HOST="${OSS_ENDPOINT#http://}"
+          ENDPOINT_HOST="${ENDPOINT_HOST#https://}"
+          ENDPOINT_HOST="${ENDPOINT_HOST%/}"
+          REGION="${ENDPOINT_HOST#oss-}"
+          REGION="${REGION%%.*}"
+
+          ossutil cp manifest.json \
+            "oss://${OSS_BUCKET}/dashboard/release/latest.json" \
+            --endpoint="$OSS_ENDPOINT" \
+            --region="$REGION" \
+            --force
+
+      - name: Announce new version via MQTT
+        shell: bash
+        env:
+          MQTT_BROKER_HOST: ${{ secrets.MQTT_BROKER_HOST }}
+          MQTT_PUB_USER: ${{ secrets.MQTT_PUB_USER }}
+          MQTT_PUB_PASS: ${{ secrets.MQTT_PUB_PASS }}
+          CHANNEL: ${{ steps.release-meta.outputs.channel }}
+        run: |
+          set -euo pipefail
+          : "${MQTT_BROKER_HOST:?Missing MQTT_BROKER_HOST}"
+          : "${MQTT_PUB_USER:?Missing MQTT_PUB_USER}"
+          : "${MQTT_PUB_PASS:?Missing MQTT_PUB_PASS}"
+
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mosquitto-clients
+          mosquitto_pub \
+            -h "$MQTT_BROKER_HOST" \
+            -p 31883 \
+            -u "$MQTT_PUB_USER" \
+            -P "$MQTT_PUB_PASS" \
+            -t "andless/ota/dashboard/${CHANNEL}" \
+            -q 1 \
+            -r \
+            -f manifest.json
+          echo "Published retained update announcement to andless/ota/dashboard/${CHANNEL}"
+
+      - name: Notify Feishu
+        if: env.FEISHU_WEBHOOK_URL != ''
+        shell: bash
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          CHANNEL: ${{ steps.release-meta.outputs.channel }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          VERSION="$(jq -r '.version' manifest.json)"
+          COMMIT="$(jq -r '.commit' manifest.json | cut -c1-7)"
+          BUILD_TIME="$(jq -r '.build_time' manifest.json)"
+          FORCE="$(jq -r '.force' manifest.json)"
+          if [[ "$FORCE" == "true" ]]; then
+            TITLE="🚨 Dashboard ${CHANNEL} v${VERSION}（强制更新）"
+            TEMPLATE="red"
+            FORCE_LINE=$'\n**更新策略**：强制更新，用户必须升级'
+          else
+            TITLE="🎉 Dashboard ${CHANNEL} v${VERSION} 发布"
+            TEMPLATE="blue"
+            FORCE_LINE=""
+          fi
+          CONTENT="$(
+            printf '**版本**：v%s\n**渠道**：%s\n**Commit**：`%s`\n**构建时间**：%s%s\n\n[查看 CI 运行](%s)' \
+              "$VERSION" "$CHANNEL" "$COMMIT" "$BUILD_TIME" "$FORCE_LINE" "$RUN_URL"
+          )"
+          jq -n \
+            --arg title "$TITLE" \
+            --arg template "$TEMPLATE" \
+            --arg content "$CONTENT" \
+            '{
+              msg_type: "interactive",
+              card: {
+                config: { wide_screen_mode: true },
+                header: {
+                  title: { tag: "plain_text", content: $title },
+                  template: $template
+                },
+                elements: [
+                  { tag: "div", text: { tag: "lark_md", content: $content } }
+                ]
+              }
+            }' > feishu.json
+          RESPONSE="$(
+            curl --fail --silent --show-error \
+              --request POST \
+              --header "Content-Type: application/json" \
+              --data @feishu.json \
+              "$FEISHU_WEBHOOK_URL"
+          )"
+          jq -e '(.code // .StatusCode // -1) == 0' <<< "$RESPONSE" >/dev/null
