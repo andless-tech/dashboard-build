@@ -12,12 +12,31 @@ repository. It does not mirror or publish the dashboard source code.
    - a full 40-character commit SHA
    - a version tag such as `v0.1.0`
 3. Leave `release_tag` empty for 14-day Actions artifacts, or set a version tag
-   to create a draft GitHub Release.
+   to create a draft GitHub Release and publish it to the update channel. A
+   release build must use the same version tag for `source_ref` and
+   `release_tag`.
 
 The workflow resolves the requested ref to an immutable commit before starting
 the platform matrix. When `release_tag` is set, its version is written into the
 temporary Tauri build configuration so installer filenames match the source
 tag. Release assets include `BUILD-METADATA.json` and `SHA256SUMS`.
+
+## Update publication
+
+After a tagged build and its draft GitHub Release succeed, the workflow:
+
+1. Renames the five installers with immutable versioned filenames.
+2. Uploads them and `manifest.json` to
+   `dashboard/release/versions/v<version>/` in OSS.
+3. Replaces `dashboard/release/latest.json` only after every immutable object
+   upload succeeds.
+4. Publishes that manifest as a retained QoS 1 MQTT message on
+   `andless/ota/dashboard/release`.
+5. Optionally sends a Feishu release card when `FEISHU_WEBHOOK_URL` is set.
+
+An annotated private version tag containing `[force]` sets `force: true` in the
+manifest. Lightweight tags and other annotated tags produce normal optional
+updates.
 
 ## Automatic tag builds
 
@@ -64,6 +83,20 @@ The protected `private-source` environment must contain:
 
 - `DASHBOARD_APP_ID`
 - `DASHBOARD_APP_PRIVATE_KEY`
+
+The protected `release-publish` environment must contain:
+
+- `OSS_ACCESS_KEY_ID`
+- `OSS_ACCESS_KEY_SECRET`
+- `OSS_BUCKET`
+- `OSS_ENDPOINT`
+- `MQTT_BROKER_HOST`
+- `MQTT_PUB_USER`
+- `MQTT_PUB_PASS`
+
+It may also contain `FEISHU_WEBHOOK_URL`. Keep the two environments separate:
+source credentials are needed by build jobs, while delivery credentials are
+available only to the final publication job after the draft release succeeds.
 
 Do not replace these with a personal access token. The GitHub App must have no
 organization or repository permissions other than read-only repository
