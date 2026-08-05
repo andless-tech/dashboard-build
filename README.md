@@ -64,6 +64,9 @@ repository activity.
 - The build workflow accepts only `main`, full commit SHAs, and version tags;
   the automatic watcher dispatches version tags only.
 - Third-party Actions are pinned to full commit SHAs.
+- The firmware release verification key is public material supplied through the
+  `ANDLESS_FIRMWARE_PUBLIC_KEY_B64` repository variable and validated before
+  every platform build.
 - This repository does not hold OSS, MQTT, webhook, or code-signing
   credentials.
 - Build caches are intentionally disabled so private build intermediates are
@@ -97,6 +100,10 @@ The protected `release-publish` environment must contain:
 It may also contain `FEISHU_WEBHOOK_URL`. Keep the two environments separate:
 source credentials are needed by build jobs, while delivery credentials are
 available only to the final publication job after the draft release succeeds.
+
+The repository variable `ANDLESS_FIRMWARE_PUBLIC_KEY_B64` must contain the
+canonical Base64 encoding of the raw 32-byte Ed25519 firmware release public
+key. This value is compiled into every Dashboard package; it is not secret.
 
 Do not replace these with a personal access token. The GitHub App must have no
 organization or repository permissions other than read-only repository
