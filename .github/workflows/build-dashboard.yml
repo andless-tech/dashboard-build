@@ -15,6 +15,11 @@ on:
         required: false
         default: ""
         type: string
+      publish_existing:
+        description: Publish an existing versioned OSS manifest without rebuilding installers
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: dashboard-build-${{ inputs.source_ref }}
@@ -33,6 +38,7 @@ jobs:
         env:
           SOURCE_REF: ${{ inputs.source_ref }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          PUBLISH_EXISTING: ${{ inputs.publish_existing }}
         run: |
           set -euo pipefail
 
@@ -51,6 +57,11 @@ jobs:
 
           if [[ -n "$RELEASE_TAG" && "$SOURCE_REF" != "$RELEASE_TAG" ]]; then
             echo "::error::A release build must use the same version tag for source_ref and release_tag"
+            exit 1
+          fi
+
+          if [[ "$PUBLISH_EXISTING" == "true" && -z "$RELEASE_TAG" ]]; then
+            echo "::error::publish_existing requires release_tag"
             exit 1
           fi
 
@@ -129,6 +140,7 @@ jobs:
 
   build:
     name: Build ${{ matrix.name }}
+    if: inputs.publish_existing != true
     needs:
       - validate
       - resolve
@@ -280,7 +292,7 @@ jobs:
 
   release:
     name: Create draft release
-    if: inputs.release_tag != ''
+    if: inputs.release_tag != '' && inputs.publish_existing != true
     needs:
       - resolve
       - build
@@ -382,7 +394,7 @@ jobs:
 
   publish:
     name: Publish to OSS and MQTT
-    if: inputs.release_tag != ''
+    if: inputs.release_tag != '' && inputs.publish_existing != true
     timeout-minutes: 60
     needs:
       - resolve
@@ -448,39 +460,16 @@ jobs:
           REGION="${ENDPOINT_HOST#oss-}"
           REGION="${REGION%%.*}"
 
-          CHECKPOINT_DIR="$RUNNER_TEMP/oss-checkpoints"
-          mkdir -p "$CHECKPOINT_DIR"
-
           for FILE in release-files/*; do
             DESTINATION="oss://${OSS_BUCKET}/${VERSION_DIR}/$(basename "$FILE")"
             echo "Uploading $(basename "$FILE") ($(stat -c%s "$FILE") bytes)"
-
-            UPLOADED=false
-            for ATTEMPT in 1 2 3; do
-              if timeout --signal=TERM --kill-after=30s 10m \
-                ossutil cp "$FILE" "$DESTINATION" \
-                  --endpoint="$OSS_ENDPOINT" \
-                  --region="$REGION" \
-                  --force \
-                  --bigfile-threshold=8Mi \
-                  --part-size=8Mi \
-                  --parallel=4 \
-                  --checkpoint-dir="$CHECKPOINT_DIR" \
-                  --connect-timeout=15 \
-                  --read-timeout=120 \
-                  --retry-times=5; then
-                UPLOADED=true
-                break
-              fi
-
-              echo "Upload attempt ${ATTEMPT}/3 failed for $(basename "$FILE")" >&2
-              sleep 5
-            done
-
-            if [[ "$UPLOADED" != "true" ]]; then
-              echo "Failed to upload $(basename "$FILE") after 3 attempts" >&2
-              exit 1
-            fi
+            ossutil cp "$FILE" "$DESTINATION" \
+              --endpoint="$OSS_ENDPOINT" \
+              --region="$REGION" \
+              --force \
+              --connect-timeout=15 \
+              --read-timeout=120 \
+              --retry-times=5
           done
           ossutil cp manifest.json \
             "oss://${OSS_BUCKET}/${VERSION_DIR}/manifest.json" \
@@ -586,3 +575,119 @@ jobs:
               "$FEISHU_WEBHOOK_URL"
           )"
           jq -e '(.code // .StatusCode // -1) == 0' <<< "$RESPONSE" >/dev/null
+
+  publish-existing:
+    name: Publish existing OSS release
+    if: inputs.publish_existing == true
+    needs:
+      - resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: release-publish
+    permissions:
+      contents: read
+    steps:
+      - name: Install ossutil v2
+        shell: bash
+        run: |
+          set -euo pipefail
+          OSSUTIL_VERSION="2.2.1"
+          ARCHIVE="$RUNNER_TEMP/ossutil-${OSSUTIL_VERSION}.zip"
+          curl --fail --silent --show-error --location --retry 3 \
+            --output "$ARCHIVE" \
+            "https://gosspublic.alicdn.com/ossutil/v2/${OSSUTIL_VERSION}/ossutil-${OSSUTIL_VERSION}-linux-amd64.zip"
+          unzip -q "$ARCHIVE" -d "$RUNNER_TEMP"
+          OSSUTIL_DIR="$RUNNER_TEMP/ossutil-${OSSUTIL_VERSION}-linux-amd64"
+          test -x "$OSSUTIL_DIR/ossutil"
+          echo "$OSSUTIL_DIR" >> "$GITHUB_PATH"
+          "$OSSUTIL_DIR/ossutil" version
+
+      - name: Fetch and validate versioned manifest
+        shell: bash
+        env:
+          APP_VERSION: ${{ needs.resolve.outputs.app_version }}
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          : "${OSS_ACCESS_KEY_ID:?Missing OSS_ACCESS_KEY_ID}"
+          : "${OSS_ACCESS_KEY_SECRET:?Missing OSS_ACCESS_KEY_SECRET}"
+          : "${OSS_BUCKET:?Missing OSS_BUCKET}"
+          : "${OSS_ENDPOINT:?Missing OSS_ENDPOINT}"
+
+          ENDPOINT_HOST="${OSS_ENDPOINT#http://}"
+          ENDPOINT_HOST="${ENDPOINT_HOST#https://}"
+          ENDPOINT_HOST="${ENDPOINT_HOST%/}"
+          REGION="${ENDPOINT_HOST#oss-}"
+          REGION="${REGION%%.*}"
+          VERSION_MANIFEST="dashboard/release/versions/v${APP_VERSION}/manifest.json"
+
+          ossutil cp \
+            "oss://${OSS_BUCKET}/${VERSION_MANIFEST}" \
+            manifest.json \
+            --endpoint="$OSS_ENDPOINT" \
+            --region="$REGION" \
+            --force
+
+          jq -e \
+            --arg version "$APP_VERSION" \
+            --arg commit "$SOURCE_SHA" \
+            '.schema_version == 2
+              and .app == "dashboard"
+              and .channel == "release"
+              and .version == $version
+              and .commit == $commit
+              and (.artifacts | length) > 0' \
+            manifest.json >/dev/null
+          echo "Validated dashboard v${APP_VERSION} manifest at ${VERSION_MANIFEST}"
+
+      - name: Publish latest manifest
+        shell: bash
+        env:
+          APP_VERSION: ${{ needs.resolve.outputs.app_version }}
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          ENDPOINT_HOST="${OSS_ENDPOINT#http://}"
+          ENDPOINT_HOST="${ENDPOINT_HOST#https://}"
+          ENDPOINT_HOST="${ENDPOINT_HOST%/}"
+          REGION="${ENDPOINT_HOST#oss-}"
+          REGION="${REGION%%.*}"
+
+          ossutil cp \
+            "oss://${OSS_BUCKET}/dashboard/release/versions/v${APP_VERSION}/manifest.json" \
+            "oss://${OSS_BUCKET}/dashboard/release/latest.json" \
+            --endpoint="$OSS_ENDPOINT" \
+            --region="$REGION" \
+            --force
+
+      - name: Announce new version via MQTT
+        shell: bash
+        env:
+          MQTT_BROKER_HOST: ${{ secrets.MQTT_BROKER_HOST }}
+          MQTT_PUB_USER: ${{ secrets.MQTT_PUB_USER }}
+          MQTT_PUB_PASS: ${{ secrets.MQTT_PUB_PASS }}
+        run: |
+          set -euo pipefail
+          : "${MQTT_BROKER_HOST:?Missing MQTT_BROKER_HOST}"
+          : "${MQTT_PUB_USER:?Missing MQTT_PUB_USER}"
+          : "${MQTT_PUB_PASS:?Missing MQTT_PUB_PASS}"
+
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mosquitto-clients
+          mosquitto_pub \
+            -h "$MQTT_BROKER_HOST" \
+            -p 31883 \
+            -u "$MQTT_PUB_USER" \
+            -P "$MQTT_PUB_PASS" \
+            -t "andless/ota/dashboard/release" \
+            -q 1 \
+            -r \
+            -f manifest.json
+          echo "Published retained update announcement to andless/ota/dashboard/release"

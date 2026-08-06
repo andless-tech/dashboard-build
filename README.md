@@ -34,6 +34,12 @@ After a tagged build and its draft GitHub Release succeed, the workflow:
    `andless/ota/dashboard/release`.
 5. Optionally sends a Feishu release card when `FEISHU_WEBHOOK_URL` is set.
 
+If the immutable version directory is already complete in OSS, dispatch the
+workflow with matching `source_ref` and `release_tag` values and set
+`publish_existing` to `true`. This validates the existing versioned manifest,
+updates `dashboard/release/latest.json`, and republishes the retained MQTT
+announcement without rebuilding or replacing installer assets.
+
 An annotated private version tag containing `[force]` sets `force: true` in the
 manifest. Lightweight tags and other annotated tags produce normal optional
 updates.
