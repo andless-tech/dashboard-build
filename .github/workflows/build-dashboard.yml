@@ -383,6 +383,7 @@ jobs:
   publish:
     name: Publish to OSS and MQTT
     if: inputs.release_tag != ''
+    timeout-minutes: 60
     needs:
       - resolve
       - build
@@ -447,12 +448,39 @@ jobs:
           REGION="${ENDPOINT_HOST#oss-}"
           REGION="${REGION%%.*}"
 
+          CHECKPOINT_DIR="$RUNNER_TEMP/oss-checkpoints"
+          mkdir -p "$CHECKPOINT_DIR"
+
           for FILE in release-files/*; do
-            ossutil cp "$FILE" \
-              "oss://${OSS_BUCKET}/${VERSION_DIR}/$(basename "$FILE")" \
-              --endpoint="$OSS_ENDPOINT" \
-              --region="$REGION" \
-              --force
+            DESTINATION="oss://${OSS_BUCKET}/${VERSION_DIR}/$(basename "$FILE")"
+            echo "Uploading $(basename "$FILE") ($(stat -c%s "$FILE") bytes)"
+
+            UPLOADED=false
+            for ATTEMPT in 1 2 3; do
+              if timeout --signal=TERM --kill-after=30s 10m \
+                ossutil cp "$FILE" "$DESTINATION" \
+                  --endpoint="$OSS_ENDPOINT" \
+                  --region="$REGION" \
+                  --force \
+                  --bigfile-threshold=8Mi \
+                  --part-size=8Mi \
+                  --parallel=4 \
+                  --checkpoint-dir="$CHECKPOINT_DIR" \
+                  --connect-timeout=15 \
+                  --read-timeout=120 \
+                  --retry-times=5; then
+                UPLOADED=true
+                break
+              fi
+
+              echo "Upload attempt ${ATTEMPT}/3 failed for $(basename "$FILE")" >&2
+              sleep 5
+            done
+
+            if [[ "$UPLOADED" != "true" ]]; then
+              echo "Failed to upload $(basename "$FILE") after 3 attempts" >&2
+              exit 1
+            fi
           done
           ossutil cp manifest.json \
             "oss://${OSS_BUCKET}/${VERSION_DIR}/manifest.json" \
