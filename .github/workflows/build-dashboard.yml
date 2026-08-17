@@ -248,11 +248,44 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Setup protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
-        with:
-          version: "23.4"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup protoc (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          PROTOC_VERSION: "23.4"
+        run: |
+          set -euo pipefail
+          case "${RUNNER_OS}/${RUNNER_ARCH}" in
+            Linux/X64) ARCHIVE="protoc-${PROTOC_VERSION}-linux-x86_64.zip" ;;
+            macOS/ARM64) ARCHIVE="protoc-${PROTOC_VERSION}-osx-aarch_64.zip" ;;
+            macOS/X64) ARCHIVE="protoc-${PROTOC_VERSION}-osx-x86_64.zip" ;;
+            *) echo "::error::Unsupported protoc host ${RUNNER_OS}/${RUNNER_ARCH}"; exit 1 ;;
+          esac
+          INSTALL_DIR="${RUNNER_TEMP}/protoc-${PROTOC_VERSION}"
+          curl --fail --location --retry 5 --retry-all-errors \
+            --output "${RUNNER_TEMP}/${ARCHIVE}" \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${ARCHIVE}"
+          unzip -q "${RUNNER_TEMP}/${ARCHIVE}" -d "$INSTALL_DIR"
+          echo "$INSTALL_DIR/bin" >> "$GITHUB_PATH"
+          "$INSTALL_DIR/bin/protoc" --version
+
+      - name: Setup protoc (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          PROTOC_VERSION: "23.4"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = "protoc-$env:PROTOC_VERSION-win64.zip"
+          $archivePath = Join-Path $env:RUNNER_TEMP $archive
+          $installDir = Join-Path $env:RUNNER_TEMP "protoc-$env:PROTOC_VERSION"
+          & curl.exe --fail --location --retry 5 --retry-all-errors `
+            --output $archivePath `
+            "https://github.com/protocolbuffers/protobuf/releases/download/v$env:PROTOC_VERSION/$archive"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Expand-Archive -LiteralPath $archivePath -DestinationPath $installDir -Force
+          (Join-Path $installDir 'bin') | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & (Join-Path $installDir 'bin/protoc.exe') --version
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
