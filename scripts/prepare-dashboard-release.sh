@@ -6,6 +6,7 @@ set -euo pipefail
 : "${SOURCE_SHA:?SOURCE_SHA is required}"
 
 FORCE_UPDATE="${FORCE_UPDATE:-false}"
+APP_NAME="${APP_NAME:-dashboard}"
 CHANNEL="${CHANNEL:-release}"
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-artifacts}"
 RELEASE_FILES_DIR="${RELEASE_FILES_DIR:-release-files}"
@@ -26,12 +27,17 @@ if [[ "$FORCE_UPDATE" != "true" && "$FORCE_UPDATE" != "false" ]]; then
   exit 1
 fi
 
+if [[ "$APP_NAME" != "dashboard" && "$APP_NAME" != "dashboard-android" ]]; then
+  echo "Unsupported app name: $APP_NAME" >&2
+  exit 1
+fi
+
 if [[ "$CHANNEL" != "release" ]]; then
   echo "Only the release channel is supported" >&2
   exit 1
 fi
 
-VERSION_DIR="dashboard/${CHANNEL}/versions/v${APP_VERSION}"
+VERSION_DIR="${APP_NAME}/${CHANNEL}/versions/v${APP_VERSION}"
 mkdir -p "$RELEASE_FILES_DIR"
 
 copy_single_artifact() {
@@ -102,7 +108,7 @@ LINUX_APPIMAGE_JSON="$(artifact_json "$RELEASE_FILES_DIR/$LINUX_APPIMAGE_NAME")"
 
 jq -n \
   --argjson schema_version 2 \
-  --arg app "dashboard" \
+  --arg app "$APP_NAME" \
   --arg channel "$CHANNEL" \
   --arg version "$APP_VERSION" \
   --arg commit "$SOURCE_SHA" \
@@ -140,4 +146,4 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   } >> "$GITHUB_OUTPUT"
 fi
 
-echo "Prepared dashboard v${APP_VERSION} release manifest for source $SOURCE_SHA"
+echo "Prepared ${APP_NAME} v${APP_VERSION} release manifest for source $SOURCE_SHA"

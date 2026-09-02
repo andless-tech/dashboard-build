@@ -28,6 +28,9 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  APP_NAME: dashboard
+
 jobs:
   validate:
     name: Validate request
@@ -528,7 +531,7 @@ jobs:
           REGION="${REGION%%.*}"
 
           ossutil cp manifest.json \
-            "oss://${OSS_BUCKET}/dashboard/release/latest.json" \
+            "oss://${OSS_BUCKET}/${APP_NAME}/release/latest.json" \
             --endpoint="$OSS_ENDPOINT" \
             --region="$REGION" \
             --force
@@ -553,11 +556,11 @@ jobs:
             -p 31883 \
             -u "$MQTT_PUB_USER" \
             -P "$MQTT_PUB_PASS" \
-            -t "andless/ota/dashboard/${CHANNEL}" \
+            -t "andless/ota/${APP_NAME}/${CHANNEL}" \
             -q 1 \
             -r \
             -f manifest.json
-          echo "Published retained update announcement to andless/ota/dashboard/${CHANNEL}"
+          echo "Published retained update announcement to andless/ota/${APP_NAME}/${CHANNEL}"
 
       - name: Notify Feishu
         if: env.FEISHU_WEBHOOK_URL != ''
@@ -658,7 +661,7 @@ jobs:
           ENDPOINT_HOST="${ENDPOINT_HOST%/}"
           REGION="${ENDPOINT_HOST#oss-}"
           REGION="${REGION%%.*}"
-          VERSION_MANIFEST="dashboard/release/versions/v${APP_VERSION}/manifest.json"
+          VERSION_MANIFEST="${APP_NAME}/release/versions/v${APP_VERSION}/manifest.json"
 
           ossutil cp \
             "oss://${OSS_BUCKET}/${VERSION_MANIFEST}" \
@@ -670,14 +673,15 @@ jobs:
           jq -e \
             --arg version "$APP_VERSION" \
             --arg commit "$SOURCE_SHA" \
+            --arg app "$APP_NAME" \
             '.schema_version == 2
-              and .app == "dashboard"
+              and .app == $app
               and .channel == "release"
               and .version == $version
               and .commit == $commit
               and (.artifacts | length) > 0' \
             manifest.json >/dev/null
-          echo "Validated dashboard v${APP_VERSION} manifest at ${VERSION_MANIFEST}"
+          echo "Validated ${APP_NAME} v${APP_VERSION} manifest at ${VERSION_MANIFEST}"
 
       - name: Publish latest manifest
         shell: bash
@@ -696,8 +700,8 @@ jobs:
           REGION="${REGION%%.*}"
 
           ossutil cp \
-            "oss://${OSS_BUCKET}/dashboard/release/versions/v${APP_VERSION}/manifest.json" \
-            "oss://${OSS_BUCKET}/dashboard/release/latest.json" \
+            "oss://${OSS_BUCKET}/${APP_NAME}/release/versions/v${APP_VERSION}/manifest.json" \
+            "oss://${OSS_BUCKET}/${APP_NAME}/release/latest.json" \
             --endpoint="$OSS_ENDPOINT" \
             --region="$REGION" \
             --force
@@ -721,8 +725,8 @@ jobs:
             -p 31883 \
             -u "$MQTT_PUB_USER" \
             -P "$MQTT_PUB_PASS" \
-            -t "andless/ota/dashboard/release" \
+            -t "andless/ota/${APP_NAME}/release" \
             -q 1 \
             -r \
             -f manifest.json
-          echo "Published retained update announcement to andless/ota/dashboard/release"
+          echo "Published retained update announcement to andless/ota/${APP_NAME}/release"
