@@ -29,10 +29,14 @@ change. The failed historical runs remain evidence of the original failure.
 
 ## Verification
 
-- Validate workflow YAML and syntax of the three changed bash steps.
-- Check APT source isolation on local Ubuntu without installing packages.
-- Require the recovery workflow to validate the existing manifest's source SHA
-  and version, publish latest, and successfully acknowledge the MQTT message.
+- Workflow YAML parsed and all three changed bash steps passed `bash -n`.
+- Read-only APT index inspection on Ubuntu 22.04 selected only the Ubuntu
+  archive, excluding the machine's extra CUDA/cuDNN sources. No local packages
+  or system repository files were changed.
+- Recovery run 34385288505 on the fixed workflow succeeded. It validated the
+  existing v0.0.38 manifest against source commit
+  `0a5ac1a5809c23883dc76449611eed41e52ec450`, published latest, and acknowledged
+  the retained QoS 1 MQTT announcement. No installers were rebuilt.
 - The public update API and four platform download links already return 0.0.38;
   the complete Windows download matches its SHA-256 and embedded file version.
 
