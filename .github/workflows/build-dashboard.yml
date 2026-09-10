@@ -225,6 +225,21 @@ jobs:
         with:
           node-version: 22
 
+      - name: Validate firmware release public key
+        shell: bash
+        env:
+          ANDLESS_FIRMWARE_PUBLIC_KEY_B64: ${{ vars.ANDLESS_FIRMWARE_PUBLIC_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          node -e '
+            const value = process.env.ANDLESS_FIRMWARE_PUBLIC_KEY_B64 ?? "";
+            const decoded = Buffer.from(value, "base64");
+            if (decoded.length !== 32 || decoded.toString("base64") !== value) {
+              console.error("::error::ANDLESS_FIRMWARE_PUBLIC_KEY_B64 must be a canonical Base64-encoded 32-byte Ed25519 public key");
+              process.exit(1);
+            }
+          '
+
       - name: Set application version from release tag
         if: inputs.release_tag != ''
         shell: bash
@@ -315,6 +330,7 @@ jobs:
       - name: Build desktop bundle
         working-directory: source
         env:
+          ANDLESS_FIRMWARE_PUBLIC_KEY_B64: ${{ vars.ANDLESS_FIRMWARE_PUBLIC_KEY_B64 }}
           CI: "true"
           # CMake 4 removed compatibility with policy versions below 3.5.
           # audiopus_sys 0.2.2 bundles an older Opus CMake project, so provide
