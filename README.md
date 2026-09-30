@@ -34,6 +34,9 @@ After a tagged build and its draft GitHub Release succeed, the workflow:
    `andless/ota/dashboard/release`.
 5. Optionally sends a Feishu release card when `FEISHU_WEBHOOK_URL` is set.
 
+Release manifests declare `andless-pro` / `spi-nand-128m` firmware `1.0.13`
+as the minimum version compatible with this Dashboard release.
+
 If the immutable version directory is already complete in OSS, dispatch the
 workflow with matching `source_ref` and `release_tag` values and set
 `publish_existing` to `true`. This validates the existing versioned manifest,

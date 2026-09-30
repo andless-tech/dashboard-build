@@ -121,6 +121,11 @@ jq -n \
     commit: $commit,
     build_time: $build_time,
     force: $force,
+    device_requirements: {
+      product: "andless-pro",
+      variant: "spi-nand-128m",
+      minimum_firmware: "1.0.13"
+    },
     artifacts: {
       windows: $windows,
       "macos-intel": $macos_intel,

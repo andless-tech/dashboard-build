@@ -685,6 +685,9 @@ jobs:
               and .channel == "release"
               and .version == $version
               and .commit == $commit
+              and .device_requirements.product == "andless-pro"
+              and .device_requirements.variant == "spi-nand-128m"
+              and .device_requirements.minimum_firmware == "1.0.13"
               and (.artifacts | length) > 0' \
             manifest.json >/dev/null
           echo "Validated dashboard v${APP_VERSION} manifest at ${VERSION_MANIFEST}"
