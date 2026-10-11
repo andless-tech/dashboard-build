@@ -11,7 +11,10 @@ repository. It does not mirror or publish the dashboard source code.
    - `main`
    - a full 40-character commit SHA
    - a version tag such as `v0.1.0`
-3. Leave `release_tag` empty for 14-day Actions artifacts, or set a version tag
+3. Select `windows` as `build_target` for day-to-day Windows testing. The
+   other platform jobs exit without checking out or compiling source. Keep
+   `all` for release builds.
+4. Leave `release_tag` empty for 14-day Actions artifacts, or set a version tag
    to create a draft GitHub Release and publish it to the update channel. A
    release build must use the same version tag for `source_ref` and
    `release_tag`.

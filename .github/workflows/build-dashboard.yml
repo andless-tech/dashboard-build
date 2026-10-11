@@ -20,6 +20,14 @@ on:
         required: false
         default: false
         type: boolean
+      build_target:
+        description: Build every desktop platform or only the Windows test artifact
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - windows
 
 concurrency:
   group: dashboard-build-${{ inputs.source_ref }}
@@ -39,6 +47,7 @@ jobs:
           SOURCE_REF: ${{ inputs.source_ref }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           PUBLISH_EXISTING: ${{ inputs.publish_existing }}
+          BUILD_TARGET: ${{ inputs.build_target }}
         run: |
           set -euo pipefail
 
@@ -62,6 +71,11 @@ jobs:
 
           if [[ "$PUBLISH_EXISTING" == "true" && -z "$RELEASE_TAG" ]]; then
             echo "::error::publish_existing requires release_tag"
+            exit 1
+          fi
+
+          if [[ -n "$RELEASE_TAG" && "$BUILD_TARGET" != "all" ]]; then
+            echo "::error::Release builds must build all desktop platforms"
             exit 1
           fi
 
@@ -146,6 +160,8 @@ jobs:
       - resolve
     runs-on: ${{ matrix.os }}
     environment: private-source
+    env:
+      RUN_BUILD: ${{ inputs.build_target == 'all' || matrix.target == 'x86_64-pc-windows-msvc' }}
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -183,6 +199,7 @@ jobs:
 
     steps:
       - name: Create short-lived private source token
+        if: env.RUN_BUILD == 'true'
         id: app-token
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
         with:
@@ -193,6 +210,7 @@ jobs:
           permission-contents: read
 
       - name: Checkout immutable private dashboard source
+        if: env.RUN_BUILD == 'true'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: andless-tech/dashboard
@@ -204,6 +222,7 @@ jobs:
           show-progress: false
 
       - name: Verify source commit
+        if: env.RUN_BUILD == 'true'
         shell: bash
         env:
           EXPECTED_SHA: ${{ needs.resolve.outputs.source_sha }}
@@ -216,17 +235,19 @@ jobs:
           fi
 
       - name: Setup pnpm
+        if: env.RUN_BUILD == 'true'
         uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
           version: 10.33.0
 
       - name: Setup Node.js
+        if: env.RUN_BUILD == 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
 
       - name: Set application version from release tag
-        if: inputs.release_tag != ''
+        if: env.RUN_BUILD == 'true' && inputs.release_tag != ''
         shell: bash
         working-directory: source
         env:
@@ -244,12 +265,13 @@ jobs:
           echo "Set application version to $APP_VERSION"
 
       - name: Install Rust
+        if: env.RUN_BUILD == 'true'
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           targets: ${{ matrix.target }}
 
       - name: Setup protoc (Unix)
-        if: runner.os != 'Windows'
+        if: env.RUN_BUILD == 'true' && runner.os != 'Windows'
         shell: bash
         env:
           PROTOC_VERSION: "23.4"
@@ -270,7 +292,7 @@ jobs:
           "$INSTALL_DIR/bin/protoc" --version
 
       - name: Setup protoc (Windows)
-        if: runner.os == 'Windows'
+        if: env.RUN_BUILD == 'true' && runner.os == 'Windows'
         shell: pwsh
         env:
           PROTOC_VERSION: "23.4"
@@ -288,7 +310,7 @@ jobs:
           & (Join-Path $installDir 'bin/protoc.exe') --version
 
       - name: Install system dependencies (Linux)
-        if: runner.os == 'Linux'
+        if: env.RUN_BUILD == 'true' && runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
@@ -309,10 +331,12 @@ jobs:
             libudev-dev
 
       - name: Install frontend dependencies
+        if: env.RUN_BUILD == 'true'
         working-directory: source
         run: pnpm install --frozen-lockfile
 
       - name: Build desktop bundle
+        if: env.RUN_BUILD == 'true'
         working-directory: source
         env:
           CI: "true"
@@ -323,6 +347,7 @@ jobs:
         run: pnpm tauri build --ci ${{ matrix.tauri_args }}
 
       - name: Upload bundle
+        if: env.RUN_BUILD == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.artifact_name }}
