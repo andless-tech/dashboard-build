@@ -346,6 +346,19 @@ jobs:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
         run: pnpm tauri build --ci ${{ matrix.tauri_args }}
 
+      - name: Remove spaces from Windows installer filenames
+        if: runner.os == 'Windows'
+        shell: bash
+        working-directory: source/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis
+        run: |
+          set -euo pipefail
+          for installer in *.exe; do
+            filename="${installer// /-}"
+            if [[ "$installer" != "$filename" ]]; then
+              mv -- "$installer" "$filename"
+            fi
+          done
+
       - name: Upload bundle
         if: env.RUN_BUILD == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
