@@ -19,6 +19,12 @@ repository. It does not mirror or publish the dashboard source code.
    release build must use the same version tag for `source_ref` and
    `release_tag`.
 
+For a true Windows Debug build, choose `build_target=windows` and
+`build_mode=debug`, leaving `release_tag` empty and `publish_existing=false`.
+This passes `--debug` to Tauri and uploads `dashboard-windows-x64-debug` as an
+Actions artifact only. Debug publication is rejected; omitted `build_mode`
+keeps the existing release compiler profile, including automatic tag builds.
+
 The workflow resolves the requested ref to an immutable commit before starting
 the platform matrix. When `release_tag` is set, its version is written into the
 temporary Tauri build configuration so installer filenames match the source

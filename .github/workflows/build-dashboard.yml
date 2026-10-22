@@ -1,6 +1,6 @@
 name: Build private dashboard
 
-run-name: Build dashboard ${{ inputs.source_ref }}${{ inputs.release_tag != '' && format(' as {0}', inputs.release_tag) || '' }}
+run-name: Build dashboard ${{ inputs.source_ref }}${{ inputs.build_mode == 'debug' && ' (Windows Debug)' || '' }}${{ inputs.release_tag != '' && format(' as {0}', inputs.release_tag) || '' }}
 
 on:
   workflow_dispatch:
@@ -28,6 +28,14 @@ on:
         options:
           - all
           - windows
+      build_mode:
+        description: Debug is for Windows test artifacts only; releases keep release mode
+        required: false
+        default: release
+        type: choice
+        options:
+          - release
+          - debug
 
 concurrency:
   group: dashboard-build-${{ inputs.source_ref }}
@@ -48,8 +56,18 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
           PUBLISH_EXISTING: ${{ inputs.publish_existing }}
           BUILD_TARGET: ${{ inputs.build_target }}
+          BUILD_MODE: ${{ inputs.build_mode || 'release' }}
         run: |
           set -euo pipefail
+
+          if [[ "$BUILD_MODE" != "release" && "$BUILD_MODE" != "debug" ]]; then
+            echo "::error::Unknown build mode"
+            exit 1
+          fi
+          if [[ "$BUILD_MODE" == "debug" && ( "$BUILD_TARGET" != "windows" || -n "$RELEASE_TAG" || "$PUBLISH_EXISTING" == "true" ) ]]; then
+            echo "::error::Debug builds require Windows-only artifacts with no publication"
+            exit 1
+          fi
 
           if [[ "$SOURCE_REF" != "main" \
             && ! "$SOURCE_REF" =~ ^[0-9a-f]{40}$ \
@@ -344,12 +362,12 @@ jobs:
           # audiopus_sys 0.2.2 bundles an older Opus CMake project, so provide
           # the compatibility floor without modifying the private source.
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
-        run: pnpm tauri build --ci ${{ matrix.tauri_args }}
+        run: pnpm tauri build --ci ${{ inputs.build_mode == 'debug' && '--debug' || '' }} ${{ matrix.tauri_args }}
 
       - name: Remove spaces from Windows installer filenames
-        if: runner.os == 'Windows'
+        if: env.RUN_BUILD == 'true' && runner.os == 'Windows'
         shell: bash
-        working-directory: source/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis
+        working-directory: source/src-tauri/target/x86_64-pc-windows-msvc/${{ inputs.build_mode == 'debug' && 'debug' || 'release' }}/bundle/nsis
         run: |
           set -euo pipefail
           for installer in *.exe; do
@@ -363,8 +381,8 @@ jobs:
         if: env.RUN_BUILD == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_path }}
+          name: ${{ matrix.artifact_name }}${{ inputs.build_mode == 'debug' && '-debug' || '' }}
+          path: ${{ inputs.build_mode == 'debug' && 'source/src-tauri/target/x86_64-pc-windows-msvc/debug/bundle/nsis/*.exe' || matrix.artifact_path }}
           if-no-files-found: error
           retention-days: 14
 
