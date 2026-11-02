@@ -31,6 +31,20 @@ if [[ "$CHANNEL" != "release" ]]; then
   exit 1
 fi
 
+NOTES_URL="https://www.andless.tech/changelog/desktop/${APP_VERSION}/"
+notes_metadata="${RELEASE_NOTES_METADATA:-}"
+if [[ -z "$notes_metadata" ]]; then
+  notes_metadata="$(mktemp)"
+  trap 'rm -f "$notes_metadata"' EXIT
+  curl --fail --silent --show-error --proto '=https' --max-time 30 --retry 2 \
+    "${NOTES_URL}metadata.json" --output "$notes_metadata"
+fi
+jq -se --arg version "$APP_VERSION" --arg url "$NOTES_URL" --argjson force "$FORCE_UPDATE" '
+  length == 1 and (.[0] | .app == "dashboard" and .channel == "release" and .version == $version and
+  .release_notes_url == $url and .force == $force and
+  (.changelog | type == "string" and length > 0 and utf8bytelength <= 16000))
+' "$notes_metadata" >/dev/null
+
 VERSION_DIR="dashboard/${CHANNEL}/versions/v${APP_VERSION}"
 mkdir -p "$RELEASE_FILES_DIR"
 
@@ -101,6 +115,7 @@ LINUX_DEB_JSON="$(artifact_json "$RELEASE_FILES_DIR/$LINUX_DEB_NAME")"
 LINUX_APPIMAGE_JSON="$(artifact_json "$RELEASE_FILES_DIR/$LINUX_APPIMAGE_NAME")"
 
 jq -n \
+  --slurpfile release_notes "$notes_metadata" \
   --argjson schema_version 2 \
   --arg app "dashboard" \
   --arg channel "$CHANNEL" \
@@ -121,6 +136,8 @@ jq -n \
     commit: $commit,
     build_time: $build_time,
     force: $force,
+    changelog: $release_notes[0].changelog,
+    release_notes_url: $release_notes[0].release_notes_url,
     device_requirements: {
       product: "andless-pro",
       variant: "spi-nand-128m",
