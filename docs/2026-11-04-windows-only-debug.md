@@ -1,0 +1,1 @@
+Temporary test branch: remove non-Windows matrix jobs so queued macOS no-op jobs cannot occupy max-parallel slots before the requested Windows debug build. Dashboard source remains pinned to decea7e. Artifact-only dispatch, no release tag, no public release. Matrix reduced to one Windows job; original main workflow is unchanged.
