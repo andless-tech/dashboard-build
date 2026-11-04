@@ -184,36 +184,7 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        include:
-          - name: Linux x64
-            os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            tauri_args: --target x86_64-unknown-linux-gnu --bundles deb,appimage
-            artifact_name: dashboard-linux-x64
-            artifact_path: |
-              source/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
-              source/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
-
-          - name: macOS Intel
-            os: macos-15
-            target: x86_64-apple-darwin
-            tauri_args: --target x86_64-apple-darwin --bundles dmg
-            artifact_name: dashboard-macos-intel
-            artifact_path: source/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
-
-          - name: macOS Apple Silicon
-            os: macos-15
-            target: aarch64-apple-darwin
-            tauri_args: --target aarch64-apple-darwin --bundles dmg
-            artifact_name: dashboard-macos-apple-silicon
-            artifact_path: source/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-
-          - name: Windows x64
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
-            tauri_args: --target x86_64-pc-windows-msvc --bundles nsis
-            artifact_name: dashboard-windows-x64
-            artifact_path: source/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+        include: ${{ inputs.build_target == 'windows' && fromJSON('[{"name":"Windows x64","os":"windows-latest","target":"x86_64-pc-windows-msvc","tauri_args":"--target x86_64-pc-windows-msvc --bundles nsis","artifact_name":"dashboard-windows-x64","artifact_path":"source/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe"}]') || fromJSON('[{"name":"Linux x64","os":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","tauri_args":"--target x86_64-unknown-linux-gnu --bundles deb,appimage","artifact_name":"dashboard-linux-x64","artifact_path":"source/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb\nsource/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage"},{"name":"macOS Intel","os":"macos-15","target":"x86_64-apple-darwin","tauri_args":"--target x86_64-apple-darwin --bundles dmg","artifact_name":"dashboard-macos-intel","artifact_path":"source/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg"},{"name":"macOS Apple Silicon","os":"macos-15","target":"aarch64-apple-darwin","tauri_args":"--target aarch64-apple-darwin --bundles dmg","artifact_name":"dashboard-macos-apple-silicon","artifact_path":"source/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg"},{"name":"Windows x64","os":"windows-latest","target":"x86_64-pc-windows-msvc","tauri_args":"--target x86_64-pc-windows-msvc --bundles nsis","artifact_name":"dashboard-windows-x64","artifact_path":"source/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe"}]') }}
 
     steps:
       - name: Create short-lived private source token
